@@ -1,0 +1,14 @@
+.( Hello, world!)
+CR
+
+: MULTIPLES 11 1 DO DUP I * . LOOP CR DROP ;
+
+7 MULTIPLES
+
+: TF IF .( TRUE) ELSE .( FALSE) THEN CR ;
+
+1 TF
+0 TF
+
+CR
+\ PRINTDEBUG MULTIPLES

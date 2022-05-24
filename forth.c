@@ -1,60 +1,10 @@
-/* forth implementation - tdwsl 2022 */
+/* sforth - tdwsl 2022 */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
-
-#define FORTH_STACK_SIZE 256
-#define FORTH_LSTACK_SIZE 128
-#define FORTH_ISTACK_SIZE 64
-
-enum {
-  FORTH_PUSH,
-  FORTH_DROP,
-  FORTH_PLUS,
-  FORTH_MINUS,
-  FORTH_DIV,
-  FORTH_MUL,
-  FORTH_MOD,
-  FORTH_DUP,
-  FORTH_OVER,
-  FORTH_ROT,
-  FORTH_SWAP,
-  FORTH_CALL,
-  FORTH_JUMP,
-  FORTH_JZ,
-  FORTH_JNZ,
-  FORTH_DO,
-  FORTH_LOOP,
-  FORTH_DEPTH,
-  FORTH_I,
-  FORTH_CR,
-  FORTH_FULLSTOP,
-  FORTH_RECURSE,
-  FORTH_LESS,
-  FORTH_GREATER,
-  FORTH_INC,
-  FORTH_DEC,
-  FORTH_EQUAL,
-};
-
-typedef struct forthWord {
-  char *identifier;
-  char *program;
-  int size;
-} ForthWord;
-
-typedef struct forthInstance {
-  struct {
-    ForthWord *words;
-    int size;
-    int lock;
-  } dict;
-  int stack[FORTH_STACK_SIZE];
-  int lstack[FORTH_LSTACK_SIZE];
-  int sp, lsp;
-} ForthInstance;
+#include "forth.h"
 
 const char *forth_compileOnly[] = {
   "IF",
@@ -115,6 +65,16 @@ void forth_initWord(ForthWord *w, char *identifier) {
   forth_uppercase(w->identifier);
   w->program = 0;
   w->size = 0;
+  w->strings = 0;
+  w->num_strings = 0;
+}
+
+void forth_freeWord(ForthWord w) {
+  free(w.identifier);
+  if(w.program)
+    free(w.program);
+  if(w.strings)
+    free(w.strings);
 }
 
 void forth_addInstruction(ForthWord *w, char ins) {
@@ -133,6 +93,12 @@ void forth_concatWord(ForthWord *w, ForthWord w2) {
   for(int i = 0; i < w2.size; i++)
     w->program[w->size+i] = w2.program[i];
   w->size += w2.size;
+}
+
+void forth_addString(ForthWord *w, char *s) {
+  w->strings = realloc(w->strings, sizeof(char*)*(++w->num_strings));
+  w->strings[w->num_strings-1] = malloc(strlen(s)+1);
+  strcpy(w->strings[w->num_strings-1], s);
 }
 
 void forth_addWord(ForthInstance *fth, ForthWord w) {
@@ -226,6 +192,10 @@ void forth_addDefaultWords(ForthInstance *fth) {
   forth_addInstruction(&w, FORTH_EQUAL);
   forth_addWord(fth, w);
 
+  forth_initWord(&w, "BYE");
+  forth_addInstruction(&w, FORTH_BYE);
+  forth_addWord(fth, w);
+
   fth->dict.lock = fth->dict.size;
 }
 
@@ -236,18 +206,17 @@ ForthInstance *forth_newInstance() {
   fth->dict.size = 0;
   fth->dict.words = 0;
   fth->dict.lock = 0;
+  fth->quit = false;
   forth_addDefaultWords(fth);
   return fth;
 }
 
 void forth_freeInstance(ForthInstance *fth) {
-  for(int i = 0; i < fth->dict.size; i++) {
-    free(fth->dict.words[i].identifier);
-    if(fth->dict.words[i].program)
-      free(fth->dict.words[i].program);
-  }
+  for(int i = 0; i < fth->dict.size; i++)
+    forth_freeWord(fth->dict.words[i]);
   if(fth->dict.words)
     free(fth->dict.words);
+
   free(fth);
 }
 
@@ -285,6 +254,7 @@ char **forth_splitString(char *text) {
 
   bool comment = false;
   char quote = 0;
+  bool upper = true;
 
   for(char *c = text; ; c++) {
     if(*c == '\n' || *c == 0) {
@@ -292,11 +262,32 @@ char **forth_splitString(char *text) {
       len = 0;
 
       if(s[0] || quote) {
+        if(!quote && upper)
+          forth_uppercase(s);
+        else if(strcmp(s, ".\"") == 0
+            || strcmp(s, ".(") == 0
+            || strcmp(s, ".'") == 0)
+          s[1] = '"';
+
+        if(!quote && strcmp(s, "\\") == 0)
+          continue;
+
         strings = realloc(strings, sizeof(char*)*(++num_strings));
         strings[num_strings-1] = malloc(strlen(s)+1);
         strcpy(strings[num_strings-1], s);
-        if(!quote)
-          forth_uppercase(strings[num_strings-1]);
+
+        upper = true;
+
+        if(quote)
+          continue;
+
+        if(strcmp(s, ".\"") == 0) {
+          strings = realloc(strings, sizeof(char*)*(++num_strings));
+          strings[num_strings-1] = malloc(1);
+          strings[num_strings-1][0] = 0;
+        }
+        else if(strcmp(s, "INCLUDE") == 0)
+          upper = false;
       }
 
       comment = false;
@@ -337,10 +328,30 @@ char **forth_splitString(char *text) {
       s[len] = 0;
       len = 0;
 
+      if(strcmp(s, "\\") == 0) {
+        comment = true;
+        continue;
+      }
+
+      if(strcmp(s, ".\"") == 0
+          || strcmp(s, ".(") == 0
+          || strcmp(s, ".'") == 0) {
+        quote = s[1];
+        if(quote == '(')
+          quote = ')';
+        s[1] = '"';
+      }
+
+      if(upper)
+        forth_uppercase(s);
       strings = realloc(strings, sizeof(char*)*(++num_strings));
       strings[num_strings-1] = malloc(strlen(s)+1);
       strcpy(strings[num_strings-1], s);
-      forth_uppercase(strings[num_strings-1]);
+
+      upper = true;
+
+      if(strcmp(s, "INCLUDE") == 0)
+        upper = false;
 
       continue;
     }
@@ -361,6 +372,9 @@ char **forth_splitString(char *text) {
 }
 
 void forth_runWord(ForthInstance *fth, ForthWord w) {
+  if(fth->quit)
+    return;
+
   int pc = 0;
   int n1, n2, n3;
   while(pc < w.size)
@@ -485,6 +499,13 @@ void forth_runWord(ForthInstance *fth, ForthWord w) {
     case FORTH_EQUAL:
       forth_push(fth, forth_pop(fth) == forth_pop(fth));
       break;
+    case FORTH_PUTSTR:
+      printf("%s", w.strings[forth_chars2int(w.program+pc)]);
+      pc += 4;
+      break;
+    case FORTH_BYE:
+      fth->quit = true;
+      return;
     }
 }
 
@@ -548,6 +569,10 @@ void forth_printWord(ForthInstance *fth, ForthWord w) {
       printf("="); break;
     case FORTH_DEPTH:
       printf("DEPTH"); break;
+    case FORTH_PUTSTR:
+      printf(".\" "); break;
+    case FORTH_BYE:
+      printf("BYE"); break;
     }
     switch(w.program[pc-1]) {
     default:
@@ -563,6 +588,10 @@ void forth_printWord(ForthInstance *fth, ForthWord w) {
     case FORTH_CALL:
       printf(" %s",
           fth->dict.words[forth_chars2int(w.program+pc)].identifier);
+      pc += 4;
+      break;
+    case FORTH_PUTSTR:
+      printf("%s", w.strings[forth_chars2int(w.program+pc)]);
       pc += 4;
       break;
     }
@@ -603,7 +632,7 @@ void forth_runString(ForthInstance *fth, char *text) {
   ForthWord w;
   int taken;
 
-  for(int i = 0; strings[i]; i++) {
+  for(int i = 0; strings[i] && !fth->quit; i++) {
     char *string = strings[i];
 
     if(compile) {
@@ -614,28 +643,69 @@ void forth_runString(ForthInstance *fth, char *text) {
       }
 
       else if(strcmp(string, ";") == 0) {
-        if(if_sp) {
-          printf("expect THEN after IF in %s\n", w.identifier);
-          free(w.program);
-          free(w.identifier);
-        }
-        else if(do_sp) {
-          printf("expect LOOP after DO in %s\n", w.identifier);
-          free(w.program);
-          free(w.identifier);
-        }
-
-        else if(taken == -1)
-          forth_addWord(fth, w);
-        else {
-          free(fth->dict.words[taken].identifier);
-          if(fth->dict.words[taken].program)
-            free(fth->dict.words[taken].program);
-
-          fth->dict.words[taken] = w;
-        }
+        /* end of word */
 
         compile = false;
+
+        /* check if identifier is valid */
+
+        int n;
+        if(forth_isnum(string, &n)) {
+          printf("identifier cannot be an integer !\n");
+          continue;
+        }
+
+        int taken = -1;
+        for(int j = 0; j < fth->dict.size; j++)
+          if(strcmp(fth->dict.words[j].identifier, w.identifier) == 0) {
+            taken = j;
+            break;
+          }
+
+        if(taken != -1 && taken < fth->dict.lock) {
+          printf("cannot redefine %s\n", fth->dict.words[taken].identifier);
+          forth_freeWord(w);
+          continue;
+        }
+
+        bool found = false;
+        for(int j = 0; forth_compileOnly[j]; j++)
+          if(strcmp(forth_compileOnly[j], w.identifier) == 0) {
+            printf("cannot redefine %s\n", forth_compileOnly[j]);
+            forth_freeWord(w);
+            found = true;
+            break;
+          }
+        if(found)
+          continue;
+
+        /* valid identifier, check if and loop */
+
+        if(if_sp) {
+          printf("expect THEN after IF in %s\n", w.identifier);
+          forth_freeWord(w);
+          continue;
+        }
+        if(do_sp) {
+          printf("expect LOOP after DO in %s\n", w.identifier);
+          forth_freeWord(w);
+          continue;
+        }
+
+        /* finally, add word */
+
+        if(taken != -1) {
+          forth_freeWord(fth->dict.words[taken]);
+          fth->dict.words[taken] = w;
+        }
+        else
+          forth_addWord(fth, w);
+      }
+
+      else if(strcmp(string, ".\"") == 0) {
+        forth_addInstruction(&w, FORTH_PUTSTR);
+        forth_addInteger(&w, w.num_strings);
+        forth_addString(&w, strings[++i]);
       }
 
       else if(strcmp(string, "IF") == 0) {
@@ -656,7 +726,7 @@ void forth_runString(ForthInstance *fth, char *text) {
         }
 
         if_sp--;
-        if(else_a[if_sp] == -1) {
+        if(else_a[if_sp] != -1) {
           forth_int2chars(else_a[if_sp]+4, w.program+if_a[if_sp]);
           forth_int2chars(w.size, w.program+else_a[if_sp]);
         }
@@ -721,32 +791,35 @@ void forth_runString(ForthInstance *fth, char *text) {
         if(strcmp(string, ";") == 0)
           continue;
 
-        int n;
-        if(forth_isnum(string, &n)) {
-          printf("identifier cannot be number !\n");
+        forth_initWord(&w, string);
+        compile = true;
+      }
+
+      else if(strcmp(string, ".\"") == 0)
+        printf("%s", strings[++i]);
+
+      else if(strcmp(string, "PRINTDEBUG") == 0) {
+        string = strings[++i];
+        if(!string) {
+          printf("expect word after PRINTDEBUG\n");
           continue;
         }
 
-        bool found = false;
-        for(int j = 0; j < fth->dict.lock; j++)
-          if(strcmp(string, fth->dict.words[j].identifier) == 0) {
-            printf("cannot redefine %s !\n");
-            found = true;
-            break;
+        for(int j = 0; j < fth->dict.size; j++)
+          if(strcmp(fth->dict.words[j].identifier, string) == 0) {
+            forth_printWord(fth, fth->dict.words[j]);
+            continue;
           }
-        if(found)
+      }
+
+      else if(strcmp(string, "INCLUDE") == 0) {
+        string = strings[++i];
+        if(!string) {
+          printf("expect filename after INCLUDE\n");
           continue;
+        }
 
-        taken = -1;
-
-        for(int j = fth->dict.lock; j < fth->dict.size; j++)
-          if(strcmp(string, fth->dict.words[j].identifier) == 0) {
-            taken = j;
-            break;
-          }
-
-        forth_initWord(&w, string);
-        compile = true;
+        forth_runFile(fth, string);
       }
 
       else
@@ -765,10 +838,25 @@ void forth_runString(ForthInstance *fth, char *text) {
   free(strings);
 }
 
-int main() {
-  ForthInstance *fth = forth_newInstance();
-  forth_runString(fth, "1 2 + . cr : multiples 11 1 do dup i * . loop cr drop ; 7 multiples");
-  forth_printWord(fth, fth->dict.words[fth->dict.lock]);
-  forth_freeInstance(fth);
-  return 0;
+void forth_runFile(ForthInstance *fth, const char *filename) {
+  FILE *fp = fopen(filename, "r");
+  if(!fp) {
+    printf("failed to open %s\n", filename);
+    return;
+  }
+
+  int max = 300;
+  const int buf = 50;
+  char *s = malloc(max);
+  int len = 0;
+  for(s[len++] = fgetc(fp); s[len-1] != EOF; s[len++] = fgetc(fp))
+    if(len > max-buf) {
+      max += buf;
+      s = realloc(s, max);
+    }
+  s[len-1] = 0;
+  fclose(fp);
+
+  forth_runString(fth, s);
+  free(s);
 }
