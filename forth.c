@@ -196,6 +196,22 @@ void forth_addDefaultWords(ForthInstance *fth) {
   forth_addInstruction(&w, FORTH_BYE);
   forth_addWord(fth, w);
 
+  forth_initWord(&w, "@");
+  forth_addInstruction(&w, FORTH_GETMEM);
+  forth_addWord(fth, w);
+
+  forth_initWord(&w, "!");
+  forth_addInstruction(&w, FORTH_SETMEM);
+  forth_addWord(fth, w);
+
+  forth_initWord(&w, "HERE");
+  forth_addInstruction(&w, FORTH_HERE);
+  forth_addWord(fth, w);
+
+  forth_initWord(&w, "ALLOT");
+  forth_addInstruction(&w, FORTH_ALLOT);
+  forth_addWord(fth, w);
+
   fth->dict.lock = fth->dict.size;
 }
 
@@ -207,6 +223,7 @@ ForthInstance *forth_newInstance() {
   fth->dict.words = 0;
   fth->dict.lock = 0;
   fth->quit = false;
+  fth->here = 0;
   forth_addDefaultWords(fth);
   return fth;
 }
@@ -506,6 +523,19 @@ void forth_runWord(ForthInstance *fth, ForthWord w) {
     case FORTH_BYE:
       fth->quit = true;
       return;
+    case FORTH_HERE:
+      forth_push(fth, fth->here);
+      break;
+    case FORTH_ALLOT:
+      fth->here += forth_pop(fth);
+      break;
+    case FORTH_SETMEM:
+      fth->memory[forth_pop(fth)] = forth_pop(fth);
+      break;
+    case FORTH_GETMEM:
+      n1 = forth_pop(fth);
+      forth_push(fth, fth->memory[n1]);
+      break;
     }
 }
 
@@ -573,6 +603,14 @@ void forth_printWord(ForthInstance *fth, ForthWord w) {
       printf(".\" "); break;
     case FORTH_BYE:
       printf("BYE"); break;
+    case FORTH_GETMEM:
+      printf("@"); break;
+    case FORTH_SETMEM:
+      printf("!"); break;
+    case FORTH_HERE:
+      printf("HERE"); break;
+    case FORTH_ALLOT:
+      printf("ALLOT"); break;
     }
     switch(w.program[pc-1]) {
     default:
@@ -621,6 +659,58 @@ void forth_callWord(ForthInstance *fth, char *string) {
   }
 }
 
+void forth_checkAddWord(ForthInstance *fth, ForthWord w, int if_sp, int do_sp) {
+  /* check if identifier is valid */
+
+  int n;
+  if(forth_isnum(w.identifier, &n)) {
+    printf("identifier cannot be an integer !\n");
+    return;
+  }
+
+  int taken = -1;
+  for(int j = 0; j < fth->dict.size; j++)
+    if(strcmp(fth->dict.words[j].identifier, w.identifier) == 0) {
+      taken = j;
+      break;
+    }
+
+  if(taken != -1 && taken < fth->dict.lock) {
+    printf("cannot redefine %s\n", fth->dict.words[taken].identifier);
+    forth_freeWord(w);
+    return;
+  }
+
+  for(int j = 0; forth_compileOnly[j]; j++)
+    if(strcmp(forth_compileOnly[j], w.identifier) == 0) {
+      printf("cannot redefine %s\n", forth_compileOnly[j]);
+      forth_freeWord(w);
+      return;
+    }
+
+  /* valid identifier, check if and loop */
+
+  if(if_sp) {
+    printf("expect THEN after IF in %s\n", w.identifier);
+    forth_freeWord(w);
+    return;
+  }
+  if(do_sp) {
+    printf("expect LOOP after DO in %s\n", w.identifier);
+    forth_freeWord(w);
+    return;
+  }
+
+  /* finally, add word */
+
+  if(taken != -1) {
+    forth_freeWord(fth->dict.words[taken]);
+    fth->dict.words[taken] = w;
+  }
+  else
+    forth_addWord(fth, w);
+}
+
 void forth_runString(ForthInstance *fth, char *text) {
   bool compile = false;
   int if_a[FORTH_ISTACK_SIZE];
@@ -644,62 +734,8 @@ void forth_runString(ForthInstance *fth, char *text) {
 
       else if(strcmp(string, ";") == 0) {
         /* end of word */
-
+        forth_checkAddWord(fth, w, if_sp, do_sp);
         compile = false;
-
-        /* check if identifier is valid */
-
-        int n;
-        if(forth_isnum(string, &n)) {
-          printf("identifier cannot be an integer !\n");
-          continue;
-        }
-
-        int taken = -1;
-        for(int j = 0; j < fth->dict.size; j++)
-          if(strcmp(fth->dict.words[j].identifier, w.identifier) == 0) {
-            taken = j;
-            break;
-          }
-
-        if(taken != -1 && taken < fth->dict.lock) {
-          printf("cannot redefine %s\n", fth->dict.words[taken].identifier);
-          forth_freeWord(w);
-          continue;
-        }
-
-        bool found = false;
-        for(int j = 0; forth_compileOnly[j]; j++)
-          if(strcmp(forth_compileOnly[j], w.identifier) == 0) {
-            printf("cannot redefine %s\n", forth_compileOnly[j]);
-            forth_freeWord(w);
-            found = true;
-            break;
-          }
-        if(found)
-          continue;
-
-        /* valid identifier, check if and loop */
-
-        if(if_sp) {
-          printf("expect THEN after IF in %s\n", w.identifier);
-          forth_freeWord(w);
-          continue;
-        }
-        if(do_sp) {
-          printf("expect LOOP after DO in %s\n", w.identifier);
-          forth_freeWord(w);
-          continue;
-        }
-
-        /* finally, add word */
-
-        if(taken != -1) {
-          forth_freeWord(fth->dict.words[taken]);
-          fth->dict.words[taken] = w;
-        }
-        else
-          forth_addWord(fth, w);
       }
 
       else if(strcmp(string, ".\"") == 0) {
@@ -810,6 +846,21 @@ void forth_runString(ForthInstance *fth, char *text) {
             forth_printWord(fth, fth->dict.words[j]);
             continue;
           }
+      }
+
+      else if(strcmp(string, "CREATE") == 0) {
+        string = strings[++i];
+        if(!string) {
+          printf("expect identifier after CREATE\n");
+          continue;
+        }
+
+        forth_initWord(&w, string);
+        forth_addInstruction(&w, FORTH_PUSH);
+        forth_addInteger(&w, fth->here);
+        forth_printWord(fth, w);
+
+        forth_checkAddWord(fth, w, 0, 0);
       }
 
       else if(strcmp(string, "INCLUDE") == 0) {
