@@ -8,6 +8,7 @@
 #define FORTH_STACK_SIZE 256
 #define FORTH_LSTACK_SIZE 128
 #define FORTH_ISTACK_SIZE 64
+#define FORTH_MEMORY_SIZE 65536
 
 enum {
   FORTH_PUSH,
@@ -39,6 +40,10 @@ enum {
   FORTH_EQUAL,
   FORTH_PUTSTR,
   FORTH_BYE,
+  FORTH_SETMEM,
+  FORTH_GETMEM,
+  FORTH_HERE,
+  FORTH_ALLOT,
 };
 
 typedef struct forthWord {
@@ -59,6 +64,8 @@ typedef struct forthInstance {
   int lstack[FORTH_LSTACK_SIZE];
   int sp, lsp;
   bool quit;
+  unsigned char memory[FORTH_MEMORY_SIZE];
+  int here;
 } ForthInstance;
 
 ForthInstance *forth_newInstance();
