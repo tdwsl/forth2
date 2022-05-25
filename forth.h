@@ -44,6 +44,8 @@ enum {
   FORTH_GETMEM,
   FORTH_HERE,
   FORTH_ALLOT,
+  FORTH_EMIT,
+  FORTH_LOOPPLUS,
 };
 
 typedef struct forthWord {

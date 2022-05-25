@@ -1,9 +1,7 @@
+\ test program for forth interpreter
+
 .( Hello, world!)
-CR
-
-: MULTIPLES 11 1 DO DUP I * . LOOP CR DROP ;
-
-7 MULTIPLES
+CR CR
 
 : TF IF .( TRUE) ELSE .( FALSE) THEN CR ;
 
@@ -12,3 +10,32 @@ CR
 
 CR
 \ PRINTDEBUG MULTIPLES
+
+: ASCII 127 32 DO I . I EMIT 9 EMIT
+  I 31 - 10 MOD 0 = IF CR THEN LOOP CR ;
+
+ASCII
+
+CR
+
+: FILLA 10 0 DO DUP I SWAP ! 1+ LOOP DROP ;
+: PRINTA 10 0 DO DUP @ . 1+ LOOP CR DROP ;
+
+CREATE A 10 ALLOT
+A FILLA
+128 A 6 + !
+A PRINTA
+
+CR
+
+: *EMIT BEGIN EMIT DEPTH 0 = UNTIL ;
+
+\ ascii codes for w o l l e y
+119 111 108 108 101 121
+*EMIT CR
+
+CR
+
+: PLUS5S 26 0 DO DUP I + . 5 LOOP+ DROP CR ;
+
+3 PLUS5S

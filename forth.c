@@ -212,6 +212,10 @@ void forth_addDefaultWords(ForthInstance *fth) {
   forth_addInstruction(&w, FORTH_ALLOT);
   forth_addWord(fth, w);
 
+  forth_initWord(&w, "EMIT");
+  forth_addInstruction(&w, FORTH_EMIT);
+  forth_addWord(fth, w);
+
   fth->dict.lock = fth->dict.size;
 }
 
@@ -481,6 +485,8 @@ void forth_runWord(ForthInstance *fth, ForthWord w) {
       fth->lstack[fth->lsp++] = forth_pop(fth);
       fth->lstack[fth->lsp++] = forth_pop(fth);
       break;
+    case FORTH_LOOPPLUS:
+      fth->lstack[fth->lsp-2] += forth_pop(fth) - 1;
     case FORTH_LOOP:
       n1 = fth->lstack[fth->lsp-1];
       fth->lstack[fth->lsp-2]++;
@@ -530,11 +536,15 @@ void forth_runWord(ForthInstance *fth, ForthWord w) {
       fth->here += forth_pop(fth);
       break;
     case FORTH_SETMEM:
-      fth->memory[forth_pop(fth)] = forth_pop(fth);
+      n1 = forth_pop(fth);
+      fth->memory[n1] = forth_pop(fth);
       break;
     case FORTH_GETMEM:
       n1 = forth_pop(fth);
       forth_push(fth, fth->memory[n1]);
+      break;
+    case FORTH_EMIT:
+      printf("%c", forth_pop(fth));
       break;
     }
 }
@@ -611,11 +621,16 @@ void forth_printWord(ForthInstance *fth, ForthWord w) {
       printf("HERE"); break;
     case FORTH_ALLOT:
       printf("ALLOT"); break;
+    case FORTH_EMIT:
+      printf("EMIT"); break;
+    case FORTH_LOOPPLUS:
+      printf("LOOP+"); break;
     }
     switch(w.program[pc-1]) {
     default:
       break;
     case FORTH_LOOP:
+    case FORTH_LOOPPLUS:
     case FORTH_JNZ:
     case FORTH_JZ:
     case FORTH_JUMP:
@@ -659,7 +674,9 @@ void forth_callWord(ForthInstance *fth, char *string) {
   }
 }
 
-void forth_checkAddWord(ForthInstance *fth, ForthWord w, int if_sp, int do_sp) {
+void forth_checkAddWord(ForthInstance *fth, ForthWord w,
+    int if_sp, int do_sp, int begin_sp)
+{
   /* check if identifier is valid */
 
   int n;
@@ -700,6 +717,11 @@ void forth_checkAddWord(ForthInstance *fth, ForthWord w, int if_sp, int do_sp) {
     forth_freeWord(w);
     return;
   }
+  if(begin_sp) {
+    printf("expect UNTIL after BEGIN in %s\n", w.identifier);
+    forth_freeWord(w);
+    return;
+  }
 
   /* finally, add word */
 
@@ -718,6 +740,8 @@ void forth_runString(ForthInstance *fth, char *text) {
   int if_sp = 0;
   int do_a[FORTH_LSTACK_SIZE];
   int do_sp = 0;
+  int begin_a[FORTH_LSTACK_SIZE];
+  int begin_sp = 0;
   char **strings = forth_splitString(text);
   ForthWord w;
   int taken;
@@ -734,7 +758,7 @@ void forth_runString(ForthInstance *fth, char *text) {
 
       else if(strcmp(string, ";") == 0) {
         /* end of word */
-        forth_checkAddWord(fth, w, if_sp, do_sp);
+        forth_checkAddWord(fth, w, if_sp, do_sp, begin_sp);
         compile = false;
       }
 
@@ -770,6 +794,18 @@ void forth_runString(ForthInstance *fth, char *text) {
           forth_int2chars(w.size, w.program+if_a[if_sp]);
       }
 
+      else if(strcmp(string, "BEGIN") == 0)
+        begin_a[begin_sp++] = w.size;
+      else if(strcmp(string, "UNTIL") == 0) {
+        if(!begin_sp) {
+          printf("expect BEGIN before UNTIL in %s\n", w.identifier);
+          continue;
+        }
+
+        forth_addInstruction(&w, FORTH_JZ);
+        forth_addInteger(&w, begin_a[--begin_sp]);
+      }
+
       else if(strcmp(string, "RECURSE") == 0)
         forth_addInstruction(&w, FORTH_RECURSE);
 
@@ -786,8 +822,21 @@ void forth_runString(ForthInstance *fth, char *text) {
         forth_addInstruction(&w, FORTH_LOOP);
         forth_addInteger(&w, do_a[--do_sp]);
       }
-      else if(strcmp(string, "I") == 0)
-        forth_addInstruction(&w, FORTH_I);
+      else if(strcmp(string, "LOOP+") == 0) {
+        if(do_sp <= 0) {
+          printf("expect DO before LOOP+ in %s\n", w.identifier);
+          continue;
+        }
+
+        forth_addInstruction(&w, FORTH_LOOPPLUS);
+        forth_addInteger(&w, do_a[--do_sp]);
+      }
+      else if(strcmp(string, "I") == 0) {
+        if(do_sp)
+          forth_addInstruction(&w, FORTH_I);
+        else
+          printf("expect DO before I in %s\n", w.identifier);
+      }
 
       else {
         bool found = false;
@@ -858,9 +907,8 @@ void forth_runString(ForthInstance *fth, char *text) {
         forth_initWord(&w, string);
         forth_addInstruction(&w, FORTH_PUSH);
         forth_addInteger(&w, fth->here);
-        forth_printWord(fth, w);
 
-        forth_checkAddWord(fth, w, 0, 0);
+        forth_checkAddWord(fth, w, 0, 0, 0);
       }
 
       else if(strcmp(string, "INCLUDE") == 0) {
